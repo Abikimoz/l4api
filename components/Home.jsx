@@ -1,72 +1,104 @@
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, View, Text, FlatList, Button, Image } from 'react-native';
 import * as SQLite from 'expo-sqlite';
+import { useRouter } from 'expo-router';
 
-const Home = ({ navigation }) => {
+const Home = () => {
   const [products, setProducts] = useState([]);
   const [db, setDb] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const router = useRouter();
 
   useEffect(() => {
     const initDB = async () => {
-      const database = await SQLite.openDatabaseAsync('store.db');
-      setDb(database);
+      try {
+        const database = await SQLite.openDatabaseAsync('store.db');
+        setDb(database);
 
-      // Создание таблицы корзины
-      database.transaction(tx => {
-        tx.executeSql(
-          "CREATE TABLE IF NOT EXISTS cart (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, image TEXT, price REAL, description TEXT);"
-        );
-      });
+        await database.execAsync(`
+          CREATE TABLE IF NOT EXISTS cart (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            image TEXT,
+            price REAL,
+            description TEXT
+          )
+        `);
+
+        await fetchProducts(); // Получение продуктов после успешной инициализации БД
+      } catch (error) {
+        console.error("Ошибка при инициализации базы данных:", error);
+      }
     };
 
     initDB();
-    fetchProducts();
   }, []);
 
   const fetchProducts = async () => {
-    const response = await fetch('https://fakestoreapi.com/products');
-    const data = await response.json();
-    setProducts(data);
+    try {
+      const response = await fetch('https://fakestoreapi.com/products');
+      const data = await response.json();
+      setProducts(data);
+    } catch (error) {
+      console.error("Ошибка при получении продуктов:", error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const addToCart = (product) => {
+  const addToCart = async (product) => {
     if (!db) {
       console.error("База данных еще не инициализирована.");
-      return; // Прекратить выполнение, если база данных не инициализирована
+      return;
     }
-    
-    db.transaction(tx => {
-      tx.executeSql(
-        "INSERT INTO cart (title, image, price, description) VALUES (?, ?, ?, ?)",
-        [product.title, product.image, product.price, product.description],
-        () => console.log("Добавлено в корзину"),
-        (tx, error) => console.error("Ошибка при добавлении в корзину:", error)
-      );
-    });
+
+    try {
+      await db.withTransactionAsync(async () => {
+        await db.execAsync(`
+          INSERT INTO cart (title, image, price, description) 
+          VALUES (?, ?, ?, ?)
+        `, [product.title, product.image, product.price, product.description]);
+      });
+      console.log("Товар успешно добавлен в корзину");
+    } catch (error) {
+      console.error("Ошибка при добавлении товара в корзину:", error);
+    }
   };
 
-  const navigateToCart = () => {
-    navigation.navigate('Cart');
+  const getCartItem = async (id) => {
+    if (!db) {
+      console.error("База данных еще не инициализирована.");
+      return;
+    }
+
+    try {
+      const result = await db.execAsync(`SELECT * FROM cart WHERE id = ?`, [id]);
+      console.log(result.rows._array[0]); // Обработка полученной записи
+    } catch (error) {
+      console.error("Ошибка при получении товара из корзины:", error);
+    }
   };
 
-  const renderItem = ({ item }) => (
-    <View style={styles.card}>
-      <Image source={{ uri: item.image }} style={styles.image} />
-      <Text style={styles.title}>{item.title}</Text>
-      <Text>{item.description}</Text>
-      <Text>Цена: ${item.price}</Text>
-      <Button title="Добавить в корзину" onPress={() => addToCart(item)} />
-    </View>
-  );
+  if (isLoading) {
+    return <Text>Загрузка продуктов...</Text>;
+  }
 
   return (
     <View style={styles.container}>
       <FlatList
         data={products}
-        keyExtractor={item => item.id.toString()}
-        renderItem={renderItem}
+        keyExtractor={(item) => item.id.toString()}
+        renderItem={({ item }) => (
+          <View style={styles.card}>
+            <Image source={{ uri: item.image }} style={styles.image} />
+            <Text style={styles.title}>{item.title}</Text>
+            <Text>{item.description}</Text>
+            <Text>Цена: ${item.price}</Text>
+            <Button title="Добавить в корзину" onPress={() => addToCart(item)} />
+          </View>
+        )}
       />
-      <Button title="Перейти в корзину" onPress={navigateToCart} />
+      <Button title="Перейти в корзину" onPress={() => router.push('/cart')} />
     </View>
   );
 };
